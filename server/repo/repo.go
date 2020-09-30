@@ -2,16 +2,21 @@ package repo
 
 import (
 	"errors"
-	"github.com/byronzhu-haha/chat/server/entity"
+	"github.com/byronzhu-haha/chat/entity/user"
+	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
 )
 
 type Repo interface {
-	Save(u *entity.User) error
-	Get(id string) (*entity.User, error)
+	Save(u *user.User) error
+	Get(id string) (*user.User, error)
 	Del(id string) error
+	List(username string) ([]*user.User, error)
+	DelUserFriend(userid, friendID string) error
+	AddUserFriend(userid, friendID string) error
+	ListUserFriend(userid string) []user.BriefUser
 }
 
 type UserIPRepo interface {
@@ -19,18 +24,22 @@ type UserIPRepo interface {
 	GetUserIP(uid string) (string, error)
 }
 
+var (
+	ErrNotFoundUser = errors.New("not found user who want to search")
+)
+
 type UserManager struct {
-	users map[string]*entity.User
+	users map[string]*user.User
 	mu    sync.RWMutex
 }
 
 func NewUserManager() Repo {
 	return &UserManager{
-		users: make(map[string]*entity.User),
+		users: make(map[string]*user.User),
 	}
 }
 
-func (m *UserManager) Save(u *entity.User) error {
+func (m *UserManager) Save(u *user.User) error {
 	if u == nil {
 		return errors.New("user is nil")
 	}
@@ -40,14 +49,32 @@ func (m *UserManager) Save(u *entity.User) error {
 	return nil
 }
 
-func (m *UserManager) Get(id string) (*entity.User, error) {
+func (m *UserManager) Get(id string) (*user.User, error) {
 	m.mu.RLock()
 	u, ok := m.users[id]
-	m.mu.RUnlock()
 	if !ok {
-		return nil, errors.New("not found user")
+		m.mu.RUnlock()
+		return nil, ErrNotFoundUser
 	}
+	m.mu.RUnlock()
 	return u, nil
+}
+
+func (m *UserManager) List(username string) (res []*user.User, err error) {
+	var (
+		reg = regexp.MustCompile("*"+username+"*")
+	)
+	m.mu.RLock()
+	for _, u := range m.users {
+		if reg.MatchString(u.Name()) {
+			res = append(res, u)
+		}
+	}
+	m.mu.RUnlock()
+	if len(res) == 0 {
+		err = ErrNotFoundUser
+	}
+	return res, err
 }
 
 func (m *UserManager) Del(id string) error {
@@ -55,6 +82,55 @@ func (m *UserManager) Del(id string) error {
 	delete(m.users, id)
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *UserManager) AddUserFriend(userid, friendID string) error {
+	m.mu.Lock()
+	u, ok := m.users[userid]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNotFoundUser
+	}
+	f, ok := m.users[friendID]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNotFoundUser
+	}
+	u.AddFriend(friendID, f.Name())
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *UserManager) DelUserFriend(userid, friendID string) error {
+	m.mu.Lock()
+	u, ok := m.users[userid]
+	if !ok {
+		m.mu.Unlock()
+		return ErrNotFoundUser
+	}
+	u.DelFriend(friendID)
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *UserManager) ListUserFriend(userid string) []user.BriefUser {
+	m.mu.RLock()
+	u, ok := m.users[userid]
+	if !ok {
+		m.mu.RUnlock()
+		return []user.BriefUser{}
+	}
+	res := u.ListFriend()
+	for i, re := range res {
+		f, ok := m.users[re.ID]
+		if !ok {
+			continue
+		}
+		res[i].State = f.State()
+	}
+	u.SortFriend(res)
+	m.mu.RUnlock()
+	return res
 }
 
 type UserIPManager struct {

@@ -3,7 +3,7 @@ package message
 import (
 	"bytes"
 	"encoding/gob"
-	"github.com/byronzhu-haha/chat/server/entity"
+	"github.com/byronzhu-haha/chat/entity/user"
 )
 
 const serverLogo = "server"
@@ -87,13 +87,15 @@ const (
 )
 
 type ResponseHeader struct {
+	Op       OperateType
 	Seq      int
 	Code     Code
 	DestAddr string
 }
 
-func PackResponseHeader(destAddr string, seq int, code Code) ([]byte, error) {
+func PackResponseHeader(destAddr string, op OperateType, seq int, code Code) ([]byte, error) {
 	return marshal(&ResponseHeader{
+		Op:       op,
 		Seq:      seq,
 		Code:     code,
 		DestAddr: destAddr,
@@ -127,21 +129,31 @@ func UnpackChatHeader(data []byte) (head ChatHeader, err error) {
 type OperateType byte
 
 const (
-	OperateTypeRegister OperateType = iota + 1 // 注册
-	OperateTypeLogin                           // 登录
-	OperateTypeLogout                          // 登出
-	OperateTypeDelete                          // 注销
+	OperateTypeRegister     OperateType = iota + 1 // 注册
+	OperateTypeLogin                               // 登录
+	OperateTypeLogout                              // 登出
+	OperateTypeDelete                              // 注销
+	OperateTypeSearchFriend                        // 搜索好友
+	OperateTypeMakeFriend                          // 交友
+	OperateTypeDeleteFriend                        // 删除好友
+	OperateTypeListFriend                          // 好友列表
 )
 
 type ServerMetadata struct {
-	Operate OperateType
-	User    *entity.User
+	Operate      OperateType
+	Username     string
+	Userid       string
+	Passwd       string
+	DestUsername string
+	DestUserID   string
 }
 
-func PackMetadata(op OperateType, user *entity.User) ([]byte, error) {
+func PackMetadata(op OperateType, username, userid, passwd, destUsername, destUserID string) ([]byte, error) {
 	meta := &ServerMetadata{
-		Operate: op,
-		User:    user,
+		Operate:  op,
+		Username: username,
+		Userid:   username,
+		Passwd:   passwd,
 	}
 	var buf = &bytes.Buffer{}
 	err := gob.NewEncoder(buf).Encode(meta)
@@ -158,4 +170,15 @@ func UnpackMetadata(buf []byte) (ServerMetadata, error) {
 		return res, err
 	}
 	return res, nil
+}
+
+type UserList []*user.User
+
+func (l *UserList) Marshal() (res []byte, err error) {
+	err = gob.NewEncoder(bytes.NewBuffer(res)).Encode(l)
+	return res, err
+}
+
+func (l *UserList) Unmarshal(buf []byte) error {
+	return gob.NewDecoder(bytes.NewBuffer(buf)).Decode(l)
 }

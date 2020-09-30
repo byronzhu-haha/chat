@@ -3,7 +3,7 @@ package conn
 import (
 	"context"
 	"errors"
-	"github.com/byronzhu-haha/chat/message"
+	"github.com/byronzhu-haha/chat/entity/message"
 	"github.com/byronzhu-haha/chat/server/repo"
 	"github.com/byronzhu-haha/log"
 	"net"

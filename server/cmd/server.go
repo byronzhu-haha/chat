@@ -3,9 +3,9 @@ package cmd
 import (
 	"context"
 	"errors"
-	"github.com/byronzhu-haha/chat/message"
+	"github.com/byronzhu-haha/chat/entity/message"
+	"github.com/byronzhu-haha/chat/entity/user"
 	"github.com/byronzhu-haha/chat/server/conn"
-	"github.com/byronzhu-haha/chat/server/entity"
 	"github.com/byronzhu-haha/chat/server/repo"
 	"github.com/byronzhu-haha/log"
 	"os"
@@ -58,17 +58,25 @@ func (s *ChatServer) HandleMessage() {
 
 		var (
 			resp []byte
-			code  = message.CodeOk
+			code = message.CodeOk
 		)
 		switch meta.Operate {
 		case message.OperateTypeRegister:
-			resp, err = s.Register(meta.User)
+			resp, err = s.Register(meta.Username, meta.Passwd)
 		case message.OperateTypeLogin:
-			resp, err = s.Login(head.SrcAddr, meta.User)
+			resp, err = s.Login(head.SrcAddr, meta.Username, meta.Passwd)
 		case message.OperateTypeLogout:
-			resp, err = s.Logout(meta.User)
+			resp, err = s.Logout(meta.Username)
 		case message.OperateTypeDelete:
-			resp, err = s.Delete(meta.User)
+			resp, err = s.Delete(meta.Username)
+		case message.OperateTypeSearchFriend:
+			resp, err = s.SearchFriend(meta.Username, meta.Userid)
+		case message.OperateTypeMakeFriend:
+			resp, err = s.MakeFriend(meta.Userid, meta.DestUserID)
+		case message.OperateTypeDeleteFriend:
+			resp, err = s.DeleteFriend(meta.Userid, meta.DestUserID)
+		case message.OperateTypeListFriend:
+			resp, err = s.ListFriend(meta.Userid)
 		default:
 			log.Infof("invalid operate, srcAddr: %s", head.SrcAddr)
 			code = message.CodeInvalidOperate
@@ -77,60 +85,103 @@ func (s *ChatServer) HandleMessage() {
 			log.Errorf("pack resp message failed, err: %+v", err)
 			code = message.CodeFailed
 		}
-		respHead, _ := message.PackResponseHeader(head.SrcAddr, 0, code)
+		respHead, _ := message.PackResponseHeader(head.SrcAddr, meta.Operate, 0, code)
 		msg, _ := message.Pack(message.MsgTypeResp, respHead, resp)
 		s.connManager.SendMsg(head.SrcAddr, msg)
 	}
 }
 
-func (s *ChatServer) Register(user *entity.User) (resp []byte, err error) {
-	if user == nil {
-		return nil, errors.New("user is nil")
-	}
+func (s *ChatServer) Register(name, pwd string) (resp []byte, err error) {
 	id := repo.GenerateOneID()
-	err = s.userRepo.Save(entity.NewUser(id, user.Name(), user.Pwd()))
+	err = s.userRepo.Save(user.NewUser(id, name, pwd, user.Offline))
 	if err == nil {
 		resp = []byte(id)
 	}
 	return
 }
 
-func (s *ChatServer) Login(addr string, user *entity.User) (resp []byte, err error) {
-	if user == nil {
-		return nil, errors.New("user is nil")
-	}
-	u, err := s.userRepo.Get(user.ID())
+func (s *ChatServer) Login(addr string, userid, pwd string) (resp []byte, err error) {
+	u, err := s.userRepo.Get(userid)
 	if err != nil {
 		return resp, err
 	}
-	if user.Pwd() != u.Pwd() {
+	if pwd != u.Pwd() {
 		err = errors.New("passwd error")
 		return resp, err
 	}
-	err = repo.SetUserIP(user.ID(), addr)
-	if err != nil {
-		return nil, err
-	}
-	u.SetState(entity.UserStateOnline)
-	return
-}
-
-func (s *ChatServer) Logout(user *entity.User) (resp []byte, err error) {
-	if user == nil {
-		return nil, errors.New("user is nil")
-	}
-	u, err := s.userRepo.Get(user.ID())
+	err = repo.SetUserIP(userid, addr)
 	if err != nil {
 		return resp, err
 	}
-	u.SetState(entity.UserStateOffline)
+	u.SetState(user.Online)
 	return
 }
 
-func (s *ChatServer) Delete(user *entity.User) (resp []byte, err error) {
-	if user == nil {
-		return nil, errors.New("user is nil")
+func (s *ChatServer) Logout(userid string) (resp []byte, err error) {
+	u, err := s.userRepo.Get(userid)
+	if err != nil {
+		return resp, err
 	}
-	err = s.userRepo.Del(user.ID())
+	u.SetState(user.Offline)
 	return
+}
+
+func (s *ChatServer) Delete(userid string) (resp []byte, err error) {
+	err = s.userRepo.Del(userid)
+	return
+}
+
+func (s *ChatServer) SearchFriend(username, userid string) (resp []byte, err error) {
+	var users = &message.UserList{}
+	u, err := s.userRepo.Get(userid)
+	if err == nil {
+		*users = append(*users, u)
+		return users.Marshal()
+	}
+	if username == "" {
+		return resp, repo.ErrNotFoundUser
+	}
+	us, err := s.userRepo.List(username)
+	if err != nil {
+		return resp, err
+	}
+	for i := 0; i < len(us); i++ {
+		*users = append(*users, us[i])
+	}
+	return users.Marshal()
+}
+
+func (s *ChatServer) MakeFriend(userid, friendID string) (resp []byte, err error) {
+	err = s.userRepo.AddUserFriend(userid, friendID)
+	if err != nil {
+		return resp, err
+	}
+
+	return s.listFriend(userid)
+}
+
+func (s *ChatServer) DeleteFriend(userid, friendID string) (resp []byte, err error) {
+	err = s.userRepo.DelUserFriend(userid, friendID)
+	if err != nil {
+		return resp, err
+	}
+
+	return s.listFriend(userid)
+}
+
+func (s *ChatServer) ListFriend(userid string) (resp []byte, err error) {
+	return s.listFriend(userid)
+}
+
+func (s *ChatServer) listFriend(userid string) (resp []byte, err error) {
+	var (
+		us = s.userRepo.ListUserFriend(userid)
+		fs = &message.UserList{}
+	)
+
+	for _, u := range us {
+		*fs = append(*fs, user.NewUser(u.ID, u.Name, "", u.State))
+	}
+
+	return fs.Marshal()
 }
